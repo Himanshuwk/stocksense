@@ -40,7 +40,6 @@ def get_stock_data(ticker):
     except Exception as e:
         return None, None, f"Error fetching data for {ticker}: {e}"
 
-@st.cache_data(ttl=3600)
 def get_fundamental_data(ticker_obj):
     """Fetches key fundamental metrics."""
     info = ticker_obj.info
