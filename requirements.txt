@@ -6,3 +6,5 @@ yfinance
 ta            # technical analysis library
 plotly
 requests
+openai
+python-dotenv
