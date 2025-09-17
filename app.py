@@ -18,8 +18,13 @@ if ticker:
         st.subheader(f"Stock Price for {ticker}")
         st.line_chart(data["Close"])
 
+        # Ensure clean Close price series
+        close_series = pd.Series(data["Close"]).dropna()
+
         # RSI indicator
-        rsi = ta.momentum.RSIIndicator(data["Close"]).rsi()
+        rsi_indicator = ta.momentum.RSIIndicator(close_series)
+        rsi = rsi_indicator.rsi()
+
         st.subheader("RSI (Relative Strength Index)")
         st.line_chart(rsi)
     else:
