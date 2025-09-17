@@ -13,7 +13,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # --- 1. Functions for Data & Analysis ---
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker):
-    """Fetches stock data and returns a ticker object."""
+    """Fetches stock data and returns a DataFrame and a status."""
     try:
         ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
@@ -31,10 +31,14 @@ def get_stock_data(ticker):
         data["SMA50"] = data["Close"].rolling(window=50).mean()
         data["SMA200"] = data["Close"].rolling(window=200).mean()
         
-        return ticker_obj, data
+        # Now, fetch the fundamental data separately to return the data, not the ticker_obj
+        fundamentals = get_fundamental_data(ticker_obj)
+        
+        return data, fundamentals, None  # Return data, fundamentals, and no error message
     except Exception as e:
-        return None, f"Error fetching data: {e}"
+        return None, None, f"Error fetching data: {e}"
 
+@st.cache_data(ttl=3600)
 def get_fundamental_data(ticker_obj):
     """Fetches key fundamental metrics."""
     info = ticker_obj.info
@@ -44,8 +48,7 @@ def get_fundamental_data(ticker_obj):
         'ROE': info.get('returnOnEquity', None),
         'P/E Ratio': info.get('forwardPE', None) or info.get('trailingPE', None),
     }
-    # Note: Promoter holding data is not reliable on yfinance. You'll need a different source for production.
-    # The current code is a placeholder to demonstrate the logic.
+    # Note: Promoter holding data is not reliable on yfinance. This is a placeholder.
     return metrics
 
 def calculate_stock_score(fundamentals, technicals):
@@ -54,17 +57,13 @@ def calculate_stock_score(fundamentals, technicals):
     tech_score = 0
 
     # Fundamental Scoring
-    # Example logic: add points for good financials
     if fundamentals.get('Debt/Equity', 2) < 1: fund_score += 20
     if fundamentals.get('ROE', 0) > 0.12: fund_score += 20
-    # Add more rules as needed...
 
     # Technical Scoring
-    # Example logic: add points for positive signals
     if technicals['RSI'][-1] > 30 and technicals['RSI'][-1] < 70: tech_score += 20
     if technicals['Close'][-1] > technicals['SMA50'][-1]: tech_score += 20
     
-    # Combine scores with your weighting (60/40)
     final_score = (fund_score * 0.6) + (tech_score * 0.4)
     
     return final_score, fund_score, tech_score
@@ -101,33 +100,31 @@ ticker = st.text_input("Enter Stock Ticker (e.g., INFY.NS):", "INFY.NS").upper()
 
 if st.button("Analyze Stock"):
     if ticker:
-        ticker_obj, data_status = get_stock_data(ticker)
+        with st.spinner("Analyzing stock..."):
+            # Call the function and unpack the returned values
+            data, fundamentals, error_message = get_stock_data(ticker)
         
-        if ticker_obj is None:
-            st.error(data_status)
+        if error_message:
+            st.error(error_message)
         else:
-            with st.spinner("Analyzing stock..."):
-                # Two-Layer Screening
-                fundamentals = get_fundamental_data(ticker_obj)
-                
-                # Check for critical fundamental data
-                if not all(fundamentals.values()):
-                    st.warning("Warning: Fundamental data is incomplete. Score may not be accurate.")
-                
-                # Get the latest technical data
-                technicals = {
-                    'Close': data["Close"],
-                    'RSI': data["RSI"],
-                    'MACD': data["MACD"],
-                    'SMA50': data["SMA50"],
-                }
-                
-                # Scoring
-                final_score, fund_score, tech_score = calculate_stock_score(fundamentals, technicals)
-                
-                # AI Insights
-                ai_insights = get_ai_insights(ticker, fundamentals, technicals, final_score)
+            # Check for fundamental data completeness
+            if not all(fundamentals.values()):
+                st.warning("Warning: Fundamental data is incomplete. Score may not be accurate.")
             
+            # Get the latest technical data from the returned DataFrame
+            technicals = {
+                'Close': data["Close"],
+                'RSI': data["RSI"],
+                'MACD': data["MACD"],
+                'SMA50': data["SMA50"],
+            }
+            
+            # Scoring
+            final_score, fund_score, tech_score = calculate_stock_score(fundamentals, technicals)
+            
+            # AI Insights
+            ai_insights = get_ai_insights(ticker, fundamentals, technicals, final_score)
+        
             # Display Results
             st.subheader(f"Analysis for {ticker}")
             st.metric(label="StockSense Score", value=f"{final_score:.2f} / 100")
