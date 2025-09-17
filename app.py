@@ -13,17 +13,19 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # --- 1. Functions for Data & Analysis ---
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker):
-    """Fetches stock data and returns a DataFrame and a status."""
+    """Fetches stock data and returns a DataFrame, fundamentals, and a status."""
     try:
         ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
-        if "regularMarketPrice" not in info:
-            return None, "No data found for this ticker."
+        
+        # Check if the ticker exists and has data
+        if "regularMarketPrice" not in info or not info["regularMarketPrice"]:
+            return None, None, f"No data found for {ticker}. Please check ticker format."
         
         # Fetch 1 year daily data
         data = ticker_obj.history(period="1y")
         if data.empty:
-            return None, "No price data for this ticker."
+            return None, None, f"No price data for {ticker}"
             
         # Add technical indicators
         data["RSI"] = ta.momentum.rsi(data["Close"])
@@ -31,12 +33,12 @@ def get_stock_data(ticker):
         data["SMA50"] = data["Close"].rolling(window=50).mean()
         data["SMA200"] = data["Close"].rolling(window=200).mean()
         
-        # Now, fetch the fundamental data separately to return the data, not the ticker_obj
+        # Now, fetch the fundamental data
         fundamentals = get_fundamental_data(ticker_obj)
         
-        return data, fundamentals, None  # Return data, fundamentals, and no error message
+        return data, fundamentals, None  # Return data, fundamentals, and a None error message
     except Exception as e:
-        return None, None, f"Error fetching data: {e}"
+        return None, None, f"Error fetching data for {ticker}: {e}"
 
 @st.cache_data(ttl=3600)
 def get_fundamental_data(ticker_obj):
@@ -48,7 +50,7 @@ def get_fundamental_data(ticker_obj):
         'ROE': info.get('returnOnEquity', None),
         'P/E Ratio': info.get('forwardPE', None) or info.get('trailingPE', None),
     }
-    # Note: Promoter holding data is not reliable on yfinance. This is a placeholder.
+    # Note: Promoter holding data from yfinance is a placeholder as it's not reliable.
     return metrics
 
 def calculate_stock_score(fundamentals, technicals):
