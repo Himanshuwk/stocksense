@@ -18,7 +18,7 @@ def get_stock_data(ticker):
         ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
         
-        # Check if the ticker exists and has data
+        # Check if the ticker exists and has price data
         if "regularMarketPrice" not in info or not info["regularMarketPrice"]:
             return None, None, f"No data found for {ticker}. Please check ticker format."
         
@@ -27,7 +27,6 @@ def get_stock_data(ticker):
         if data.empty:
             return None, None, f"No price data for {ticker}"
             
-        # Clean Close series
         close_series = data["Close"].dropna()
 
         # Add technical indicators
@@ -39,41 +38,53 @@ def get_stock_data(ticker):
         # Fetch fundamental data using ticker string
         fundamentals = get_fundamental_data(ticker)
         
-        return data, fundamentals, None  # Return data, fundamentals, no error
+        return data, fundamentals, None
     except Exception as e:
         return None, None, f"Error fetching data for {ticker}: {e}"
 
 def get_fundamental_data(ticker_str):
     """Fetches key fundamental metrics using ticker string."""
-    ticker_obj = yf.Ticker(ticker_str)
-    info = ticker_obj.info
-    metrics = {
-        'Promoter Holding': info.get('sharesOutstanding', 0) / info.get('sharesOutstanding', 1) if info.get('sharesOutstanding') else None,
-        'Debt/Equity': info.get('debtToEquity', None),
-        'ROE': info.get('returnOnEquity', None),
-        'P/E Ratio': info.get('forwardPE', None) or info.get('trailingPE', None),
-    }
-    return metrics
+    try:
+        ticker_obj = yf.Ticker(ticker_str)
+        info = ticker_obj.info
+        metrics = {
+            'Promoter Holding': info.get('sharesOutstanding', None),  # Placeholder
+            'Debt/Equity': info.get('debtToEquity', None),
+            'ROE': info.get('returnOnEquity', None),
+            'P/E Ratio': info.get('forwardPE', None) or info.get('trailingPE', None),
+        }
+        return metrics
+    except:
+        # Return empty metrics if any error occurs
+        return {'Promoter Holding': None, 'Debt/Equity': None, 'ROE': None, 'P/E Ratio': None}
 
 def calculate_stock_score(fundamentals, technicals):
-    """Calculates a composite score based on the weighted criteria."""
+    """Calculates a composite score based on weighted criteria safely."""
     fund_score = 0
     tech_score = 0
 
-    # Fundamental Scoring
-    if fundamentals.get('Debt/Equity', 2) < 1: fund_score += 20
-    if fundamentals.get('ROE', 0) > 0.12: fund_score += 20
+    debt_equity = fundamentals.get('Debt/Equity')
+    roe = fundamentals.get('ROE')
 
-    # Technical Scoring
-    if 30 < technicals['RSI'][-1] < 70: tech_score += 20
-    if technicals['Close'][-1] > technicals['SMA50'][-1]: tech_score += 20
-    
+    if debt_equity is not None and debt_equity < 1:
+        fund_score += 20
+    if roe is not None and roe > 0.12:
+        fund_score += 20
+
+    rsi = technicals['RSI'][-1]
+    close = technicals['Close'][-1]
+    sma50 = technicals['SMA50'][-1]
+
+    if rsi is not None and 30 < rsi < 70:
+        tech_score += 20
+    if close is not None and sma50 is not None and close > sma50:
+        tech_score += 20
+
     final_score = (fund_score * 0.6) + (tech_score * 0.4)
-    
     return final_score, fund_score, tech_score
 
 def get_ai_insights(ticker, fundamentals, technicals, final_score):
-    """Generates plain-language insights using an LLM."""
+    """Generates plain-language insights using OpenAI LLM."""
     prompt = f"""
     Analyze the stock {ticker} for a beginner investor based on the following data:
     - Fundamental Metrics: {fundamentals}
@@ -95,10 +106,10 @@ def get_ai_insights(ticker, fundamentals, technicals, final_score):
     except Exception as e:
         return f"Could not generate AI insights: {e}"
 
-# --- 2. Streamlit UI & Logic ---
+# --- 2. Streamlit UI ---
 st.set_page_config(page_title="StockSense", layout="wide")
 st.title("📈 StockSense – Smart Stock Selection App")
-st.markdown("A simple, user-friendly tool to combine fundamental and technical analysis.")
+st.markdown("Analyze any NSE stock dynamically with fundamental & technical indicators.")
 
 ticker = st.text_input("Enter Stock Ticker (e.g., INFY.NS):", "INFY.NS").upper()
 
@@ -119,20 +130,24 @@ if st.button("Analyze Stock"):
                 'MACD': data["MACD"],
                 'SMA50': data["SMA50"],
             }
-            
+
             final_score, fund_score, tech_score = calculate_stock_score(fundamentals, technicals)
             ai_insights = get_ai_insights(ticker, fundamentals, technicals, final_score)
-        
+
             st.subheader(f"Analysis for {ticker}")
             st.metric(label="StockSense Score", value=f"{final_score:.2f} / 100")
             st.info(ai_insights)
-            
-            # Tabs
+
+            # Tabs for charts and fundamentals
             tab1, tab2 = st.tabs(["Charts & Technicals", "Fundamental Metrics"])
             
             with tab1:
                 st.subheader("Technical Analysis")
-                st.line_chart(pd.DataFrame({"Close": data["Close"], "SMA50": data["SMA50"], "SMA200": data["SMA200"]}))
+                st.line_chart(pd.DataFrame({
+                    "Close": data["Close"], 
+                    "SMA50": data["SMA50"], 
+                    "SMA200": data["SMA200"]
+                }))
                 st.line_chart(data["RSI"])
                 st.line_chart(data["MACD"])
                 
@@ -140,6 +155,6 @@ if st.button("Analyze Stock"):
                 st.subheader("Key Fundamental Ratios")
                 fund_df = pd.DataFrame(fundamentals, index=["Value"]).T
                 st.dataframe(fund_df)
-                st.write("*(Note: Promoter Holding data from yfinance may be limited. This is a placeholder.)*")
+                st.write("*(Note: Some fundamental metrics may be limited. This is a placeholder.)*")
     else:
         st.error("Please enter a stock ticker.")
