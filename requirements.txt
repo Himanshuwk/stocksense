@@ -1,0 +1,8 @@
+streamlit
+pandas
+numpy
+matplotlib
+yfinance
+ta            # technical analysis library
+plotly
+requests
