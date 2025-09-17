@@ -27,17 +27,19 @@ def get_stock_data(ticker):
         if data.empty:
             return None, None, f"No price data for {ticker}"
             
-        # Add technical indicators
+        # Clean Close series
         close_series = data["Close"].dropna()
-        data["RSI"] = ta.momentum.RSIIndicator(close_series.values).rsi()
-        data["MACD"] = ta.trend.MACD(close_series.values).macd_diff()
+
+        # Add technical indicators
+        data["RSI"] = ta.momentum.RSIIndicator(close_series).rsi()
+        data["MACD"] = ta.trend.MACD(close_series).macd_diff()
         data["SMA50"] = close_series.rolling(window=50).mean()
         data["SMA200"] = close_series.rolling(window=200).mean()
         
-        # Now, fetch the fundamental data using ticker string
+        # Fetch fundamental data using ticker string
         fundamentals = get_fundamental_data(ticker)
         
-        return data, fundamentals, None  # Return data, fundamentals, and a None error message
+        return data, fundamentals, None  # Return data, fundamentals, no error
     except Exception as e:
         return None, None, f"Error fetching data for {ticker}: {e}"
 
