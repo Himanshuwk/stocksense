@@ -302,13 +302,11 @@ def analyze_portfolio(tickers_list, portfolio_data):
     
     # Display overall metrics
     total_pnl = total_current_value - total_invested
-    pnl_label = f"₹{total_pnl:,.2f}"
-    delta_color = "green" if total_pnl >= 0 else "red"
     
     col_metric1, col_metric2, col_metric3 = st.columns(3)
     col_metric1.metric("Total Invested Value", f"₹{total_invested:,.2f}")
     col_metric2.metric("Total Current Value", f"₹{total_current_value:,.2f}")
-    col_metric3.metric("Overall P&L", pnl_label, delta_color=delta_color)
+    col_metric3.metric("Overall P&L", f"₹{total_current_value:,.2f}", delta=f"₹{total_pnl:,.2f}")
 
 # ------------------------------
 # UI: sidebar for personalization
@@ -348,7 +346,6 @@ else: # Portfolio Analysis Mode
     st.header("Portfolio Analysis")
     st.markdown("Edit your portfolio holdings below. Change values by double-clicking a cell.")
 
-    # Initialize a dummy DataFrame for the data editor if it's the first time
     if 'portfolio_df' not in st.session_state:
         st.session_state.portfolio_df = pd.DataFrame({
             'Ticker': ['INFY.NS', 'RELIANCE.NS', 'TCS.NS'],
