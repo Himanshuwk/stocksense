@@ -18,7 +18,7 @@ if OPENAI_KEY:
     openai.api_key = OPENAI_KEY
 
 st.set_page_config(page_title="StockSense (MVP)", layout="wide")
-st.title("📈 StockSense — Smart Stock Selection (MVP)")
+st.title("📈 StockSense — Smart Stock Selection")
 st.markdown("Personalized stock scoring + AI insights for Indian stocks. Use NSE tickers like `RELIANCE.NS`, `INFY.NS`, `TCS.NS`.")
 
 # Initialize session state for button clicks if not already present
