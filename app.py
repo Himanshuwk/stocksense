@@ -1,20 +1,15 @@
-# app.py - StockSense MVP (yfinance + OpenAI for AI summaries)
-# Features: personalized scoring, AI insights, sector heatmap (basic), portfolio analysis, learning tooltips.
-
-import os
-import math
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import ta
 import openai
-from dotenv import load_dotenv
 import plotly.express as px
+from dotenv import load_dotenv
+import os
+import math
 
-# ------------------------------
-# Config / Load API key
-# ------------------------------
+# --- 0. Config / Load API key ---
 load_dotenv()
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 if OPENAI_KEY:
@@ -22,14 +17,9 @@ if OPENAI_KEY:
 
 st.set_page_config(page_title="StockSense (MVP)", layout="wide")
 st.title("📈 StockSense — Smart Stock Selection (MVP)")
-st.markdown(
-    "Personalized stock scoring + AI insights for Indian stocks. "
-    "Use NSE tickers like `RELIANCE.NS`, `INFY.NS`, `TCS.NS`."
-)
+st.markdown("Personalized stock scoring + AI insights for Indian stocks. Use NSE tickers like `RELIANCE.NS`, `INFY.NS`, `TCS.NS`.")
 
-# ------------------------------
-# Helper functions
-# ------------------------------
+# --- 1. Helper functions ---
 @st.cache_data(ttl=3600)
 def fetch_price_data(ticker, period="1y", interval="1d"):
     """Fetch price history and return DataFrame or None on failure."""
@@ -53,45 +43,54 @@ def fetch_info(ticker):
 def compute_technical_indicators(df):
     """Add RSI, SMA50, SMA200, MACD diff, Bollinger bands, returns, volatility."""
     close = df["Close"].dropna()
+    
+    # Make sure we have enough data after dropping NaNs
+    if len(close) < 200: # Use 200 as a safe minimum for all indicators
+        st.warning("Not enough historical data to compute all indicators.")
+        # Return a DataFrame with all columns but filled with NaN
+        result = pd.DataFrame(index=df.index)
+        result["RSI"] = np.nan
+        result["SMA50"] = np.nan
+        result["SMA200"] = np.nan
+        result["MACD"] = np.nan
+        result["BB_high"] = np.nan
+        result["BB_low"] = np.nan
+        result["Volume"] = np.nan if "Volume" in df.columns else np.nan
+        result["Return"] = np.nan
+        return result
+
     result = pd.DataFrame(index=close.index)
     result["Close"] = close
-
+    
     # RSI
-    try:
-        result["RSI"] = ta.momentum.RSIIndicator(close).rsi()
-    except Exception:
-        result["RSI"] = np.nan
+    result["RSI"] = ta.momentum.RSIIndicator(close).rsi()
 
     # SMA
     result["SMA50"] = close.rolling(50).mean()
     result["SMA200"] = close.rolling(200).mean()
 
     # MACD diff
-    try:
-        result["MACD"] = ta.trend.MACD(close).macd_diff()
-    except Exception:
-        result["MACD"] = np.nan
+    result["MACD"] = ta.trend.MACD(close).macd_diff()
 
     # Bollinger
-    try:
-        bb = ta.volatility.BollingerBands(close)
-        result["BB_high"] = bb.bollinger_hband()
-        result["BB_low"] = bb.bollinger_lband()
-    except Exception:
-        result["BB_high"] = np.nan
-        result["BB_low"] = np.nan
-
+    bb = ta.volatility.BollingerBands(close)
+    result["BB_high"] = bb.bollinger_hband()
+    result["BB_low"] = bb.bollinger_lband()
+    
     # Volume if present
     if "Volume" in df.columns:
         result["Volume"] = df["Volume"]
-
+    
     # Daily returns
     result["Return"] = close.pct_change()
+    
     return result
 
 def safe_get(dct, key, default=None):
     v = dct.get(key, default)
-    return default if v in (None, "", "None") else v
+    if pd.isna(v) or v in (None, "", "None"):
+      return default
+    return v
 
 def calc_beta(series_stock, series_market):
     """Calculate beta of stock vs market using aligned daily returns."""
@@ -107,9 +106,7 @@ def calc_beta(series_stock, series_market):
 
 def score_stock(fundamentals, tech_latest, weight_fund=0.6):
     """Score stock: combine fundamentals and technicals with user weights. Returns (final_score, details)."""
-    # fundamentals: dict with keys Debt/Equity (de_ratio), returnOnEquity (roe), trailingPE, promoter if available
     fund_points = 0
-    # debt/equity
     de = fundamentals.get("de_ratio")
     if de is not None:
         try:
@@ -117,7 +114,6 @@ def score_stock(fundamentals, tech_latest, weight_fund=0.6):
                 fund_points += 20
         except:
             pass
-    # ROE
     roe = fundamentals.get("roe")
     if roe is not None:
         try:
@@ -125,12 +121,10 @@ def score_stock(fundamentals, tech_latest, weight_fund=0.6):
                 fund_points += 20
         except:
             pass
-    # P/E check (lower than sector maybe good) - basic
     pe = fundamentals.get("pe")
     if pe is not None and pe > 0:
         if pe < 30:
             fund_points += 20
-    # promoter holding placeholder (if available as fraction)
     prom = fundamentals.get("promoter_holding")
     if prom is not None:
         try:
@@ -139,7 +133,6 @@ def score_stock(fundamentals, tech_latest, weight_fund=0.6):
         except:
             pass
 
-    # Technical scoring: use RSI and price vs SMA50
     tech_points = 0
     rsi = tech_latest.get("RSI")
     price = tech_latest.get("Close")
@@ -151,7 +144,6 @@ def score_stock(fundamentals, tech_latest, weight_fund=0.6):
         if price > sma50:
             tech_points += 20
 
-    # Normalize each to 0-100 (here max fund_points=80, tech_points=40) — scale to 0-100:
     fund_score_norm = min(100, (fund_points / 80) * 100) if fund_points >= 0 else 0
     tech_score_norm = min(100, (tech_points / 40) * 100) if tech_points >= 0 else 0
 
@@ -167,7 +159,6 @@ def score_stock(fundamentals, tech_latest, weight_fund=0.6):
 
 def ai_summary_safe(ticker, fundamentals, tech_latest, final_score):
     """Return an AI-generated 2-line summary if API key present, else a simple rule-based summary."""
-    # Build a concise prompt
     prompt = (
         f"Explain to a beginner investor in 2-3 simple sentences the situation for {ticker}.\n"
         f"Fundamentals: {fundamentals}\n"
@@ -190,7 +181,7 @@ def ai_summary_safe(ticker, fundamentals, tech_latest, final_score):
         return s
 
     try:
-        response = openai.ChatCompletion.create(
+        response = openai.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[{"role":"user", "content": prompt}],
             max_tokens=150,
@@ -235,76 +226,79 @@ with col1:
         if not ticker:
             st.error("Enter a valid ticker.")
         else:
-            # Fetch
-            df = fetch_price_data(ticker, period=lookback_period)
-            info = fetch_info(ticker)
-            if df is None:
-                st.error("No price data found for ticker. Check format (e.g., INFY.NS).")
-            else:
-                tech = compute_technical_indicators(df)
-                tech_latest = {
-                    "Close": float(tech["Close"].iloc[-1]) if not tech["Close"].isna().all() else None,
-                    "RSI": float(tech["RSI"].iloc[-1]) if "RSI" in tech.columns else None,
-                    "SMA50": float(tech["SMA50"].iloc[-1]) if "SMA50" in tech.columns else None,
-                    "SMA200": float(tech["SMA200"].iloc[-1]) if "SMA200" in tech.columns else None,
-                }
+            with st.spinner("Fetching data and analyzing..."):
+                df = fetch_price_data(ticker, period=lookback_period)
+                info = fetch_info(ticker)
+                
+                if df is None or info is None:
+                    st.error("No data found for ticker. Check format (e.g., INFY.NS).")
+                else:
+                    tech = compute_technical_indicators(df)
+                    
+                    if tech.empty or np.isnan(tech.get("RSI", np.nan)):
+                        st.warning("Not enough data to calculate all indicators. Please try a longer lookback period or a different ticker.")
+                    else:
+                        tech_latest = {
+                            "Close": float(tech["Close"].iloc[-1]) if not tech["Close"].isna().all() else None,
+                            "RSI": float(tech["RSI"].iloc[-1]) if "RSI" in tech.columns else None,
+                            "SMA50": float(tech["SMA50"].iloc[-1]) if "SMA50" in tech.columns else None,
+                            "SMA200": float(tech["SMA200"].iloc[-1]) if "SMA200" in tech.columns else None,
+                        }
 
-                # Fundamentals from yfinance (best-effort)
-                fundamentals = {
-                    "pe": safe_get(info, "trailingPE", None) or safe_get(info, "forwardPE", None),
-                    "roe": safe_get(info, "returnOnEquity", None),
-                    "de_ratio": safe_get(info, "debtToEquity", None),
-                    "promoter_holding": None  # placeholder; yfinance rarely has promoter
-                }
-                # sector
-                sector = safe_get(info, "sector", "Unknown")
+                        # Fundamentals from yfinance (best-effort)
+                        fundamentals = {
+                            "pe": safe_get(info, "trailingPE", None) or safe_get(info, "forwardPE", None),
+                            "roe": safe_get(info, "returnOnEquity", None),
+                            "de_ratio": safe_get(info, "debtToEquity", None),
+                            "promoter_holding": None  # placeholder
+                        }
+                        sector = safe_get(info, "sector", "Unknown")
 
-                # Score
-                final_score, details = score_stock(fundamentals, tech_latest, weight_fund)
-                label = "🟢 Strong Buy" if final_score>=80 else ("🟡 Watchlist" if final_score>=50 else "🔴 Avoid")
+                        # Score
+                        final_score, details = score_stock(fundamentals, tech_latest, weight_fund)
+                        label = "🟢 Strong Buy" if final_score>=80 else ("🟡 Watchlist" if final_score>=50 else "🔴 Avoid")
 
-                # Show results
-                st.subheader(f"{ticker} — {sector}")
-                st.metric("StockSense score", f"{final_score}/100", delta=label)
+                        # Show results
+                        st.subheader(f"{ticker} — {sector}")
+                        st.metric("StockSense score", f"{final_score}/100", delta=label)
 
-                if show_tooltips:
-                    st.caption("Score = weighted blend of fundamentals & technicals. Adjust weight in the sidebar.")
+                        if show_tooltips:
+                            st.caption("Score = weighted blend of fundamentals & technicals. Adjust weight in the sidebar.")
 
-                # Plots: price with SMA & Bollinger
-                fig_df = pd.DataFrame({
-                    "Close": tech["Close"],
-                    "SMA50": tech["SMA50"],
-                    "SMA200": tech["SMA200"],
-                    "BB_high": tech.get("BB_high"),
-                    "BB_low": tech.get("BB_low")
-                })
-                fig = px.line(fig_df.reset_index(), x=fig_df.index, y=fig_df.columns,
-                              labels={"value":"Price", "index":"Date"}, title=f"{ticker} Price & Indicators")
-                st.plotly_chart(fig, use_container_width=True)
+                        # Plots: price with SMA & Bollinger
+                        fig_df = pd.DataFrame({
+                            "Close": tech["Close"],
+                            "SMA50": tech["SMA50"],
+                            "SMA200": tech["SMA200"],
+                            "BB_high": tech.get("BB_high"),
+                            "BB_low": tech.get("BB_low")
+                        })
+                        fig = px.line(fig_df.reset_index(), x=fig_df.index, y=fig_df.columns,
+                                      labels={"value":"Price", "index":"Date"}, title=f"{ticker} Price & Indicators")
+                        st.plotly_chart(fig, use_container_width=True)
 
-                # RSI & MACD
-                st.subheader("RSI & MACD")
-                rsi_fig = px.line(tech.reset_index(), x=tech.index, y="RSI", title="RSI")
-                macd_fig = px.line(tech.reset_index(), x=tech.index, y="MACD", title="MACD")
-                st.plotly_chart(rsi_fig, use_container_width=True)
-                st.plotly_chart(macd_fig, use_container_width=True)
+                        # RSI & MACD
+                        st.subheader("RSI & MACD")
+                        rsi_fig = px.line(tech.reset_index(), x=tech.index, y="RSI", title="RSI")
+                        macd_fig = px.line(tech.reset_index(), x=tech.index, y="MACD", title="MACD")
+                        st.plotly_chart(rsi_fig, use_container_width=True)
+                        st.plotly_chart(macd_fig, use_container_width=True)
 
-                # Fundamentals table
-                st.subheader("Key fundamentals (yfinance where available)")
-                fund_df = pd.DataFrame.from_dict(fundamentals, orient="index", columns=["Value"])
-                st.dataframe(fund_df)
+                        # Fundamentals table
+                        st.subheader("Key fundamentals (yfinance where available)")
+                        fund_df = pd.DataFrame.from_dict(fundamentals, orient="index", columns=["Value"])
+                        st.dataframe(fund_df)
 
-                # AI insights
-                st.subheader("AI-powered plain language insight")
-                ai_text = ai_summary_safe(ticker, fundamentals, tech_latest, final_score)
-                st.info(ai_text)
+                        # AI insights
+                        st.subheader("AI-powered plain language insight")
+                        ai_text = ai_summary_safe(ticker, fundamentals, tech_latest, final_score)
+                        st.info(ai_text)
 
 with col2:
     st.header("Portfolio analysis (quick)")
     if not tickers_list:
         st.info("Add tickers in the sidebar (comma separated).")
     else:
-        # gather data
         portfolio_data = {}
         failed = []
         for tk in tickers_list:
@@ -343,7 +337,6 @@ with col2:
             if returns_df.shape[0] < 10:
                 st.warning("Not enough history to compute portfolio metrics.")
             else:
-                # equal weight portfolio
                 weights = np.array([1/len(returns_df.columns)]*len(returns_df.columns))
                 daily_portfolio = returns_df.fillna(0).dot(weights)
                 ann_return = ((1 + daily_portfolio.mean())**252 - 1) * 100
