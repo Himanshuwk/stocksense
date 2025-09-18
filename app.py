@@ -1,15 +1,17 @@
+import os
+import math
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import ta
 import openai
-import plotly.express as px
 from dotenv import load_dotenv
-import os
-import math
+import plotly.express as px
 
-# --- 0. Config / Load API key ---
+# ------------------------------
+# Config / Load API key
+# ------------------------------
 load_dotenv()
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 if OPENAI_KEY:
@@ -17,9 +19,14 @@ if OPENAI_KEY:
 
 st.set_page_config(page_title="StockSense (MVP)", layout="wide")
 st.title("📈 StockSense — Smart Stock Selection (MVP)")
-st.markdown("Personalized stock scoring + AI insights for Indian stocks. Use NSE tickers like `RELIANCE.NS`, `INFY.NS`, `TCS.NS`.")
+st.markdown(
+    "Personalized stock scoring + AI insights for Indian stocks. "
+    "Use NSE tickers like `RELIANCE.NS`, `INFY.NS`, `TCS.NS`."
+)
 
-# --- 1. Helper functions ---
+# ------------------------------
+# Helper functions
+# ------------------------------
 @st.cache_data(ttl=3600)
 def fetch_price_data(ticker, period="1y", interval="1d"):
     """Fetch price history and return DataFrame or None on failure."""
@@ -42,12 +49,13 @@ def fetch_info(ticker):
 
 def compute_technical_indicators(df):
     """Add RSI, SMA50, SMA200, MACD diff, Bollinger bands, returns, volatility."""
-    close = df["Close"].dropna()
+    
+    # Clean the data and convert it to a 1D Series
+    close = df["Close"].dropna().squeeze()
     
     # Make sure we have enough data after dropping NaNs
-    if len(close) < 200: # Use 200 as a safe minimum for all indicators
+    if len(close) < 200: 
         st.warning("Not enough historical data to compute all indicators.")
-        # Return a DataFrame with all columns but filled with NaN
         result = pd.DataFrame(index=df.index)
         result["RSI"] = np.nan
         result["SMA50"] = np.nan
@@ -62,26 +70,18 @@ def compute_technical_indicators(df):
     result = pd.DataFrame(index=close.index)
     result["Close"] = close
     
-    # RSI
+    # Pass the 1D Series to the ta library
     result["RSI"] = ta.momentum.RSIIndicator(close).rsi()
-
-    # SMA
     result["SMA50"] = close.rolling(50).mean()
     result["SMA200"] = close.rolling(200).mean()
-
-    # MACD diff
     result["MACD"] = ta.trend.MACD(close).macd_diff()
-
-    # Bollinger
     bb = ta.volatility.BollingerBands(close)
     result["BB_high"] = bb.bollinger_hband()
     result["BB_low"] = bb.bollinger_lband()
     
-    # Volume if present
     if "Volume" in df.columns:
         result["Volume"] = df["Volume"]
     
-    # Daily returns
     result["Return"] = close.pct_change()
     
     return result
@@ -94,7 +94,6 @@ def safe_get(dct, key, default=None):
 
 def calc_beta(series_stock, series_market):
     """Calculate beta of stock vs market using aligned daily returns."""
-    # require overlapping indices
     s = pd.concat([series_stock, series_market], axis=1).dropna()
     if s.shape[0] < 30:
         return None
@@ -168,7 +167,6 @@ def ai_summary_safe(ticker, fundamentals, tech_latest, final_score):
         "Include a 1-line explanation why."
     )
     if not OPENAI_KEY:
-        # fallback simple summary
         rsi = tech_latest.get("RSI")
         rec = "Watchlist"
         if final_score >= 80:
@@ -198,7 +196,7 @@ def ai_summary_safe(ticker, fundamentals, tech_latest, final_score):
 st.sidebar.header("Configuration & Portfolio")
 
 weight_fund = st.sidebar.slider("Weight to Fundamentals (%)", min_value=0, max_value=100, value=60, step=5)
-weight_fund = weight_fund / 100.0  # convert to 0-1
+weight_fund = weight_fund / 100.0
 
 st.sidebar.markdown("**Portfolio input** (comma separated tickers). Example: `INFY.NS, RELIANCE.NS`")
 portfolio_input = st.sidebar.text_input("Portfolio tickers:", value="INFY.NS, RELIANCE.NS")
