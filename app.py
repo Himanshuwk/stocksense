@@ -19,10 +19,11 @@ if OPENAI_KEY:
 
 st.set_page_config(page_title="StockSense (MVP)", layout="wide")
 st.title("📈 StockSense — Smart Stock Selection (MVP)")
-st.markdown(
-    "Personalized stock scoring + AI insights for Indian stocks. "
-    "Use NSE tickers like `RELIANCE.NS`, `INFY.NS`, `TCS.NS`."
-)
+st.markdown("Personalized stock scoring + AI insights for Indian stocks. Use NSE tickers like `RELIANCE.NS`, `INFY.NS`, `TCS.NS`.")
+
+# Initialize session state for button clicks if not already present
+if 'analysis_mode' not in st.session_state:
+    st.session_state['analysis_mode'] = 'individual'
 
 # ------------------------------
 # Helper functions
@@ -50,10 +51,8 @@ def fetch_info(ticker):
 def compute_technical_indicators(df):
     """Add RSI, SMA50, SMA200, MACD diff, Bollinger bands, returns, volatility."""
     
-    # Clean the data and convert it to a 1D Series
     close = df["Close"].dropna().squeeze()
     
-    # Make sure we have enough data after dropping NaNs
     if len(close) < 200: 
         st.warning("Not enough historical data to compute all indicators.")
         result = pd.DataFrame(index=df.index)
@@ -70,7 +69,6 @@ def compute_technical_indicators(df):
     result = pd.DataFrame(index=close.index)
     result["Close"] = close
     
-    # Pass the 1D Series to the ta library
     result["RSI"] = ta.momentum.RSIIndicator(close).rsi()
     result["SMA50"] = close.rolling(50).mean()
     result["SMA200"] = close.rolling(200).mean()
@@ -190,176 +188,196 @@ def ai_summary_safe(ticker, fundamentals, tech_latest, final_score):
     except Exception as e:
         return f"AI unavailable: {e}"
 
-# ------------------------------
-# UI: sidebar for personalization & portfolio input
-# ------------------------------
-st.sidebar.header("Configuration & Portfolio")
-
-weight_fund = st.sidebar.slider("Weight to Fundamentals (%)", min_value=0, max_value=100, value=60, step=5)
-weight_fund = weight_fund / 100.0
-
-st.sidebar.markdown("**Portfolio input** (comma separated tickers). Example: `INFY.NS, RELIANCE.NS`")
-portfolio_input = st.sidebar.text_input("Portfolio tickers:", value="INFY.NS, RELIANCE.NS")
-tickers_list = [t.strip().upper() for t in portfolio_input.split(",") if t.strip()]
-
-lookback_period = st.sidebar.selectbox("Price lookback for analysis", options=["6mo","1y","2y"], index=1)
-market_index = st.sidebar.text_input("Market index for beta (yfinance ticker)", value="^NSEI")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Learning mode (tooltips)**")
-if st.sidebar.checkbox("Show learning tooltips (help text)", value=True):
-    show_tooltips = True
-else:
-    show_tooltips = False
-
-# ------------------------------
-# Main UI: single stock analysis + portfolio
-# ------------------------------
-col1, col2 = st.columns([2,1])
-
-with col1:
-    st.header("Single stock quick analyze")
-    ticker = st.text_input("Enter single ticker (e.g., INFY.NS):", value="INFY.NS").upper()
-    if st.button("Analyze this stock"):
-        if not ticker:
-            st.error("Enter a valid ticker.")
-        else:
-            with st.spinner("Fetching data and analyzing..."):
-                df = fetch_price_data(ticker, period=lookback_period)
-                info = fetch_info(ticker)
-                
-                if df is None or info is None:
-                    st.error("No data found for ticker. Check format (e.g., INFY.NS).")
-                else:
-                    tech = compute_technical_indicators(df)
-                    
-                    if tech.empty or pd.isna(tech.get("RSI", pd.Series([np.nan]))).iloc[-1]:
-                        st.warning("Not enough data to calculate all indicators. Please try a longer lookback period or a different ticker.")
-                    else:
-                        tech_latest = {
-                            "Close": float(tech["Close"].iloc[-1]) if not tech["Close"].isna().all() else None,
-                            "RSI": float(tech["RSI"].iloc[-1]) if "RSI" in tech.columns else None,
-                            "SMA50": float(tech["SMA50"].iloc[-1]) if "SMA50" in tech.columns else None,
-                            "SMA200": float(tech["SMA200"].iloc[-1]) if "SMA200" in tech.columns else None,
-                        }
-
-                        # Fundamentals from yfinance (best-effort)
-                        fundamentals = {
-                            "pe": safe_get(info, "trailingPE", None) or safe_get(info, "forwardPE", None),
-                            "roe": safe_get(info, "returnOnEquity", None),
-                            "de_ratio": safe_get(info, "debtToEquity", None),
-                            "promoter_holding": None  # placeholder
-                        }
-                        sector = safe_get(info, "sector", "Unknown")
-
-                        # Score
-                        final_score, details = score_stock(fundamentals, tech_latest, weight_fund)
-                        label = "🟢 Strong Buy" if final_score>=80 else ("🟡 Watchlist" if final_score>=50 else "🔴 Avoid")
-
-                        # Show results
-                        st.subheader(f"{ticker} — {sector}")
-                        st.metric("StockSense score", f"{final_score}/100", delta=label)
-
-                        if show_tooltips:
-                            st.caption("Score = weighted blend of fundamentals & technicals. Adjust weight in the sidebar.")
-
-                        # Plots: price with SMA & Bollinger
-                        fig_df = pd.DataFrame({
-                            "Close": tech["Close"],
-                            "SMA50": tech["SMA50"],
-                            "SMA200": tech["SMA200"],
-                            "BB_high": tech.get("BB_high"),
-                            "BB_low": tech.get("BB_low")
-                        })
-                        fig = px.line(fig_df.reset_index(), x=fig_df.index, y=fig_df.columns,
-                                      labels={"value":"Price", "index":"Date"}, title=f"{ticker} Price & Indicators")
-                        st.plotly_chart(fig, use_container_width=True)
-
-                        # RSI & MACD
-                        st.subheader("RSI & MACD")
-                        rsi_fig = px.line(tech.reset_index(), x=tech.index, y="RSI", title="RSI")
-                        macd_fig = px.line(tech.reset_index(), x=tech.index, y="MACD", title="MACD")
-                        st.plotly_chart(rsi_fig, use_container_width=True)
-                        st.plotly_chart(macd_fig, use_container_width=True)
-
-                        # Fundamentals table
-                        st.subheader("Key fundamentals (yfinance where available)")
-                        fund_df = pd.DataFrame.from_dict(fundamentals, orient="index", columns=["Value"])
-                        st.dataframe(fund_df)
-
-                        # AI insights
-                        st.subheader("AI-powered plain language insight")
-                        ai_text = ai_summary_safe(ticker, fundamentals, tech_latest, final_score)
-                        st.info(ai_text)
-
-with col2:
-    st.header("Portfolio analysis (quick)")
-    if not tickers_list:
-        st.info("Add tickers in the sidebar (comma separated).")
+def analyze_individual_stock(ticker, weight_fund, show_tooltips):
+    """Main function to run the individual stock analysis."""
+    df = fetch_price_data(ticker, period=st.session_state.lookback_period)
+    info = fetch_info(ticker)
+    
+    if df is None or info is None:
+        st.error("No data found for ticker. Check format (e.g., INFY.NS).")
     else:
-        portfolio_data = {}
-        failed = []
-        for tk in tickers_list:
-            df = fetch_price_data(tk, period=lookback_period)
-            if df is None:
-                failed.append(tk)
-                continue
-            portfolio_data[tk] = {
-                "price_df": df,
-                "info": fetch_info(tk),
-                "tech": compute_technical_indicators(df)
+        tech = compute_technical_indicators(df)
+        
+        if tech.empty or pd.isna(tech.get("RSI", pd.Series([np.nan]))).iloc[-1]:
+            st.warning("Not enough data to calculate all indicators. Please try a longer lookback period or a different ticker.")
+        else:
+            tech_latest = {
+                "Close": float(tech["Close"].iloc[-1]) if not tech["Close"].isna().all() else None,
+                "RSI": float(tech["RSI"].iloc[-1]) if "RSI" in tech.columns else None,
+                "SMA50": float(tech["SMA50"].iloc[-1]) if "SMA50" in tech.columns else None,
+                "SMA200": float(tech["SMA200"].iloc[-1]) if "SMA200" in tech.columns else None,
             }
 
-        if failed:
-            st.warning(f"No price data for: {', '.join(failed)}. Remove or check tickers.")
+            fundamentals = {
+                "pe": safe_get(info, "trailingPE", None) or safe_get(info, "forwardPE", None),
+                "roe": safe_get(info, "returnOnEquity", None),
+                "de_ratio": safe_get(info, "debtToEquity", None),
+                "promoter_holding": None
+            }
+            sector = safe_get(info, "sector", "Unknown")
 
-        if portfolio_data:
-            # Sector distribution
-            sectors = {}
-            for tk, obj in portfolio_data.items():
-                s = safe_get(obj["info"], "sector", "Unknown")
-                sectors.setdefault(s, []).append(tk)
-            sector_counts = {k: len(v) for k, v in sectors.items()}
-            sec_df = pd.DataFrame({"sector": list(sector_counts.keys()), "count": list(sector_counts.values())})
-            st.subheader("Portfolio sector distribution")
-            fig = px.pie(sec_df, values="count", names="sector", title="Sectors in Portfolio")
+            final_score, details = score_stock(fundamentals, tech_latest, weight_fund)
+            label = "🟢 Strong Buy" if final_score>=80 else ("🟡 Watchlist" if final_score>=50 else "🔴 Avoid")
+
+            st.subheader(f"{ticker} — {sector}")
+            st.metric("StockSense score", f"{final_score}/100", delta=label)
+
+            if show_tooltips:
+                st.caption("Score = weighted blend of fundamentals & technicals. Adjust weight in the sidebar.")
+
+            fig_df = pd.DataFrame({
+                "Close": tech["Close"], "SMA50": tech["SMA50"], "SMA200": tech["SMA200"],
+                "BB_high": tech.get("BB_high"), "BB_low": tech.get("BB_low")
+            })
+            fig = px.line(fig_df.reset_index(), x=fig_df.index, y=fig_df.columns,
+                          labels={"value":"Price", "index":"Date"}, title=f"{ticker} Price & Indicators")
             st.plotly_chart(fig, use_container_width=True)
 
-            # Portfolio returns & volatility
-            returns_df = pd.DataFrame()
-            for tk, obj in portfolio_data.items():
-                r = obj["tech"]["Return"].rename(tk)
-                returns_df = pd.concat([returns_df, r], axis=1)
-            returns_df = returns_df.dropna(how="all")
+            st.subheader("RSI & MACD")
+            rsi_fig = px.line(tech.reset_index(), x=tech.index, y="RSI", title="RSI")
+            macd_fig = px.line(tech.reset_index(), x=tech.index, y="MACD", title="MACD")
+            st.plotly_chart(rsi_fig, use_container_width=True)
+            st.plotly_chart(macd_fig, use_container_width=True)
 
-            if returns_df.shape[0] < 10:
-                st.warning("Not enough history to compute portfolio metrics.")
-            else:
-                weights = np.array([1/len(returns_df.columns)]*len(returns_df.columns))
-                daily_portfolio = returns_df.fillna(0).dot(weights)
-                ann_return = ((1 + daily_portfolio.mean())**252 - 1) * 100
-                ann_vol = daily_portfolio.std() * np.sqrt(252) * 100
-                st.metric("Estimated annual return (%)", f"{ann_return:.2f}")
-                st.metric("Estimated annual volatility (%)", f"{ann_vol:.2f}")
+            st.subheader("Key fundamentals (yfinance where available)")
+            fund_df = pd.DataFrame.from_dict(fundamentals, orient="index", columns=["Value"])
+            st.dataframe(fund_df)
 
-                # Beta per stock vs market index
-                mdf = fetch_price_data(market_index, period=lookback_period)
-                if mdf is not None:
-                    market_returns = mdf["Close"].pct_change()
-                    betas = {}
-                    for tk, obj in portfolio_data.items():
-                        stock_returns = obj["tech"]["Return"]
-                        beta = calc_beta(stock_returns, market_returns)
-                        betas[tk] = round(beta, 3) if beta is not None else None
-                    beta_df = pd.DataFrame.from_dict(betas, orient="index", columns=["Beta"])
-                    st.subheader("Beta vs market")
-                    st.dataframe(beta_df)
-                else:
-                    st.info("Market index data not available for beta calculation.")
+            st.subheader("AI-powered plain language insight")
+            ai_text = ai_summary_safe(ticker, fundamentals, tech_latest, final_score)
+            st.info(ai_text)
+
+def analyze_portfolio(tickers_list, portfolio_data):
+    """Function to run the portfolio analysis with P&L calculation."""
+    st.subheader("Current Portfolio Status")
+    
+    # Calculate P&L for each stock
+    pnl_data = []
+    total_invested = 0
+    total_current_value = 0
+    
+    for _, row in portfolio_data.iterrows():
+        ticker = row['Ticker']
+        quantity = row['Quantity']
+        avg_price = row['Avg. Buying Price']
+        
+        info = fetch_info(ticker)
+        current_price = safe_get(info, "regularMarketPrice")
+        
+        if current_price is None or pd.isna(current_price):
+            pnl_data.append({
+                'Ticker': ticker,
+                'Quantity': quantity,
+                'Avg. Buying Price': avg_price,
+                'Current Price': "N/A",
+                'Invested Value': quantity * avg_price,
+                'Current Value': "N/A",
+                'P&L': "N/A",
+                'Status': "Data Missing"
+            })
+            total_invested += quantity * avg_price
+            continue
+
+        invested_value = quantity * avg_price
+        current_value = quantity * current_price
+        pnl = current_value - invested_value
+        status = "Profit 😊" if pnl >= 0 else "Loss 😥"
+        
+        pnl_data.append({
+            'Ticker': ticker,
+            'Quantity': quantity,
+            'Avg. Buying Price': f'₹{avg_price:,.2f}',
+            'Current Price': f'₹{current_price:,.2f}',
+            'Invested Value': f'₹{invested_value:,.2f}',
+            'Current Value': f'₹{current_value:,.2f}',
+            'P&L': f'₹{pnl:,.2f}',
+            'Status': status
+        })
+        
+        total_invested += invested_value
+        total_current_value += current_value
+
+    pnl_df = pd.DataFrame(pnl_data)
+    st.dataframe(pnl_df, use_container_width=True, hide_index=True)
+    
+    # Display overall metrics
+    total_pnl = total_current_value - total_invested
+    pnl_label = f"₹{total_pnl:,.2f}"
+    delta_color = "green" if total_pnl >= 0 else "red"
+    
+    col_metric1, col_metric2, col_metric3 = st.columns(3)
+    col_metric1.metric("Total Invested Value", f"₹{total_invested:,.2f}")
+    col_metric2.metric("Total Current Value", f"₹{total_current_value:,.2f}")
+    col_metric3.metric("Overall P&L", pnl_label, delta_color=delta_color)
 
 # ------------------------------
-# Footer / Next steps
+# UI: sidebar for personalization
+# ------------------------------
+st.sidebar.header("Configuration & Settings")
+st.session_state.weight_fund = st.sidebar.slider("Weight to Fundamentals (%)", min_value=0, max_value=100, value=60, step=5) / 100.0
+st.session_state.lookback_period = st.sidebar.selectbox("Price lookback for analysis", options=["6mo","1y","2y"], index=1)
+st.session_state.market_index = st.sidebar.text_input("Market index for beta (yfinance ticker)", value="^NSEI")
+st.session_state.show_tooltips = st.sidebar.checkbox("Show learning tooltips (help text)", value=True)
+
+# ------------------------------
+# Main App Body
+# ------------------------------
+
+# Navigation buttons
+col_nav1, col_nav2 = st.columns(2)
+with col_nav1:
+    if st.button("Individual Stock Analysis", use_container_width=True):
+        st.session_state['analysis_mode'] = 'individual'
+with col_nav2:
+    if st.button("Portfolio Analysis", use_container_width=True):
+        st.session_state['analysis_mode'] = 'portfolio'
+
+st.markdown("---")
+
+if st.session_state['analysis_mode'] == 'individual':
+    st.header("Individual Stock Analysis")
+    ticker_input = st.text_input("Enter single ticker (e.g., INFY.NS):", value="INFY.NS").upper()
+    if st.button("Analyze Stock"):
+        if not ticker_input:
+            st.error("Enter a valid ticker.")
+        else:
+            with st.spinner("Analyzing stock..."):
+                analyze_individual_stock(ticker_input, st.session_state.weight_fund, st.session_state.show_tooltips)
+
+else: # Portfolio Analysis Mode
+    st.header("Portfolio Analysis")
+    st.markdown("Edit your portfolio holdings below. Change values by double-clicking a cell.")
+
+    # Initialize a dummy DataFrame for the data editor if it's the first time
+    if 'portfolio_df' not in st.session_state:
+        st.session_state.portfolio_df = pd.DataFrame({
+            'Ticker': ['INFY.NS', 'RELIANCE.NS', 'TCS.NS'],
+            'Quantity': [10, 5, 8],
+            'Avg. Buying Price': [1400.00, 2500.00, 3200.00]
+        })
+
+    edited_df = st.data_editor(
+        st.session_state.portfolio_df,
+        column_config={
+            "Ticker": st.column_config.TextColumn("Ticker", help="Enter a valid NSE ticker"),
+            "Quantity": st.column_config.NumberColumn("Quantity", format="%d", min_value=1),
+            "Avg. Buying Price": st.column_config.NumberColumn("Avg. Buying Price", format="₹%.2f", min_value=0.01)
+        },
+        num_rows="dynamic",
+        use_container_width=True
+    )
+    
+    st.session_state.portfolio_df = edited_df
+
+    if st.button("Analyze My Portfolio"):
+        if not edited_df.empty:
+            with st.spinner("Analyzing portfolio..."):
+                analyze_portfolio(edited_df['Ticker'].tolist(), edited_df)
+        else:
+            st.warning("Please add some stocks to your portfolio to analyze.")
+
+# ------------------------------
+# Footer
 # ------------------------------
 st.markdown("---")
 st.write("Notes: This is an MVP. Findings are educational only — not financial advice.")
-st.write("Next improvements: Alerts (email/telegram), backtesting, news sentiment, better fundamentals source (NSE/Tickertape).")
