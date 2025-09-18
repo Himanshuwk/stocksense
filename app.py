@@ -136,10 +136,10 @@ def score_stock(fundamentals, tech_latest, weight_fund=0.6):
     rsi = tech_latest.get("RSI")
     price = tech_latest.get("Close")
     sma50 = tech_latest.get("SMA50")
-    if rsi is not None and not np.isnan(rsi):
+    if rsi is not None and not pd.isna(rsi):
         if 30 < rsi < 70:
             tech_points += 20
-    if price is not None and sma50 is not None and not np.isnan(sma50):
+    if price is not None and sma50 is not None and not pd.isna(sma50):
         if price > sma50:
             tech_points += 20
 
@@ -233,7 +233,7 @@ with col1:
                 else:
                     tech = compute_technical_indicators(df)
                     
-                    if tech.empty or np.isnan(tech.get("RSI", np.nan)):
+                    if tech.empty or pd.isna(tech.get("RSI", pd.Series([np.nan]))).iloc[-1]:
                         st.warning("Not enough data to calculate all indicators. Please try a longer lookback period or a different ticker.")
                     else:
                         tech_latest = {
